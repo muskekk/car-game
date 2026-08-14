@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Nightdrive — 3D Car Game</title>
+<title>Carroyx</title>
 <style>
   :root{
     --bg:#1a1b26; --panel:#20222f; --panel2:#262838; --text:#c0caf5; --muted:#7982a9;
@@ -94,9 +94,11 @@
     background:radial-gradient(ellipse at center, var(--panel2) 0%, var(--bg) 100%); border:1px solid var(--panel2);}
   .car-preview-box canvas{width:100%;height:100%;display:block;}
   .hint-tap{position:absolute;bottom:10px;left:0;right:0;text-align:center;font-size:11px;color:var(--muted);letter-spacing:.5px;}
-  .color-dots{position:absolute;top:12px;left:0;right:0;display:flex;justify-content:center;gap:8px;}
-  .dot{width:16px;height:16px;border-radius:50%;border:2px solid rgba(255,255,255,.25);cursor:pointer;}
-  .dot.active{border-color:#fff;transform:scale(1.25);}
+  .color-swatch-wrap{position:absolute;top:12px;left:0;right:0;display:flex;justify-content:center;}
+  .color-swatch{width:40px;height:40px;border-radius:50%;border:3px solid rgba(255,255,255,.5);cursor:pointer;
+    box-shadow:0 4px 14px rgba(0,0,0,.4); transition:transform .15s ease;}
+  .color-swatch:hover{transform:scale(1.08);}
+  #color-picker{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;}
 
   .select-panel{flex:1 1 320px;min-width:300px;display:flex;flex-direction:column;gap:16px;}
   .arrow-select{background:var(--panel); border:1px solid var(--panel2); border-radius:14px;padding:16px 10px;display:flex;align-items:center;justify-content:space-between;}
@@ -116,7 +118,7 @@
   /* ---------- HUD ---------- */
   #hud{position:fixed;inset:0;z-index:4;pointer-events:none;display:none;}
   #hud.active{display:block;}
-  .hud-top{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:flex-start;padding:16px 18px;}
+  .hud-top{position:absolute;top:0;left:0;right:0;display:flex;flex-wrap:wrap;gap:8px;justify-content:space-between;align-items:flex-start;padding:16px 18px;}
   .hud-chip{background:rgba(20,20,28,.55);backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.08);
     border-radius:12px;padding:8px 14px;font-size:13px;font-weight:700;letter-spacing:.5px;pointer-events:auto;}
   .hud-chip .k{color:var(--muted);font-size:10px;display:block;letter-spacing:1.5px;text-transform:uppercase;}
@@ -237,9 +239,10 @@
   <h2 style="margin:0 0 18px 0;font-weight:800;letter-spacing:1px;">Select Your Ride</h2>
   <div class="select-wrap">
     <div class="car-preview-box">
-      <div class="color-dots" id="color-dots"></div>
+      <div class="color-swatch-wrap"><div class="color-swatch" id="color-swatch"></div></div>
+      <input type="color" id="color-picker" value="#7aa2f7">
       <canvas id="preview-canvas"></canvas>
-      <div class="hint-tap">tap car to change color</div>
+      <div class="hint-tap">tap the car or the swatch to open the color picker</div>
     </div>
     <div class="select-panel">
       <div class="arrow-select">
@@ -284,6 +287,7 @@
     <div class="hud-chip" id="pause-btn">II Pause</div>
     <div class="hud-chip" id="mode-chip"><span class="k">Mode</span><span class="v">Speed</span></div>
     <div class="hud-chip" id="objective-chip"><span class="k">Time</span><span class="v">60.0</span></div>
+    <div class="hud-chip" id="camera-chip" style="cursor:pointer;pointer-events:auto;"><span class="k">Camera (C)</span><span class="v">Chase Cam</span></div>
   </div>
   <div id="park-indicator" style="display:none;"><div class="pk">DISTANCE TO BAY</div><div class="pv" id="park-dist">—</div></div>
   <div class="drift-meter-wrap" id="drift-wrap" style="display:none;">
@@ -363,7 +367,9 @@ const THEMES = [
     ambient:0x1e3038, sun:0x6699cc, building:0x1c2c33, buildingLight:0x5fb3b3 },
 ];
 
-const CAR_COLORS = [0xf7768e,0x7aa2f7,0x9ece6a,0xe0af68,0xbb9af7,0xf8f8f2,0xff5555,0x50fa7b];
+const DEFAULT_CAR_COLOR = '#7aa2f7';
+const NPC_COLORS = [0xf7768e,0x9ece6a,0xe0af68,0xbb9af7,0xf8f8f2,0xff5555,0x50fa7b,0xffa07a]; // traffic / parked cars only
+function hexToInt(hexStr){ return parseInt(hexStr.replace('#',''), 16); }
 
 const GAME_MODES = [
   { id:'speed',   name:'Speed',    desc:'Race the clock. Reach the finish line before time runs out.' },
@@ -375,11 +381,11 @@ const GAME_MODES = [
 
 const DEFAULT_KEYBINDS = {
   accelerate:'ArrowUp', brake:'ArrowDown', left:'ArrowLeft', right:'ArrowRight',
-  handbrake:'Space', shiftUp:'KeyE', shiftDown:'KeyQ', pause:'Escape'
+  handbrake:'Space', shiftUp:'KeyE', shiftDown:'KeyQ', pause:'Escape', camera:'KeyC'
 };
 const KEYBIND_LABELS = {
   accelerate:'Accelerate', brake:'Brake / Reverse', left:'Steer Left', right:'Steer Right',
-  handbrake:'Handbrake', shiftUp:'Shift Up', shiftDown:'Shift Down', pause:'Pause'
+  handbrake:'Handbrake', shiftUp:'Shift Up', shiftDown:'Shift Down', pause:'Pause', camera:'Change Camera'
 };
 const KEY_DISPLAY = { ArrowUp:'↑', ArrowDown:'↓', ArrowLeft:'←', ArrowRight:'→', Space:'SPACE' };
 function keyLabel(code){
@@ -389,21 +395,24 @@ function keyLabel(code){
   return code;
 }
 
-const GEAR_MAX_SPEED = [8, 14, 20, 27, 34, 42]; // units/sec per gear
+const GEAR_MAX_SPEED = [5, 8.5, 12.5, 17, 21.5, 26]; // units/sec per gear — tuned for a realistic street-driving feel (~94 km/h top gear)
 const KMH = 3.6;
+const CAMERA_MODES = ['chase','far','hood','top'];
+const CAMERA_LABELS = { chase:'Chase Cam', far:'Cinematic', hood:'Hood Cam', top:'Top-Down' };
 
 /* ------------------------------ STATE ----------------------------------- */
 
 const state = {
   themeIdx: 0,
   modeIdx: 0,
-  carColorIdx: 1,
+  carColorHex: DEFAULT_CAR_COLOR,
   transmission: 'automatic', // 'automatic' | 'manual'
   keybinds: Object.assign({}, DEFAULT_KEYBINDS),
   volume: 0.7,
   engineSoundOn: true,
   controlScheme: 'auto', // 'auto' | 'keyboard' | 'touch'
   listeningFor: null,
+  cameraMode: 'chase',
 };
 
 function isTouchDevice(){
@@ -429,6 +438,7 @@ window.addEventListener('keydown', (e)=>{
   keysDown[e.code] = true;
   updateInputFromKeys();
   if (e.code === state.keybinds.pause && !wasDown){ handlePauseKey(); }
+  if (e.code === state.keybinds.camera && !wasDown){ cycleCamera(); }
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
 });
 window.addEventListener('keyup', (e)=>{
@@ -505,8 +515,26 @@ function setupTouchControls(){
 }
 
 /* ------------------------------ AUDIO ------------------------------------ */
+/* Fully procedural (WebAudio) engine + tire sound. We can't pull in audio
+   from YouTube or any external source — that would be copyrighted media and
+   this file has no network access at runtime — so instead the engine note,
+   its harmonics, intake/exhaust rumble and the tire screech are all
+   synthesized live and layered/filtered to sound closer to a real car. */
 
-let audioCtx=null, masterGain=null, engineOsc=null, engineGain=null;
+let audioCtx=null, masterGain=null;
+let engineOsc=null, engineOsc2=null, engineFilter=null, engineGain=null;
+let rumbleSource=null, rumbleFilter=null, rumbleGain=null;
+let screechSource=null, screechFilter=null, screechGain=null;
+let audioReady = false;
+
+function createNoiseBuffer(ctx, seconds){
+  const bufferSize = ctx.sampleRate*seconds;
+  const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i=0;i<bufferSize;i++) data[i] = Math.random()*2-1;
+  return buffer;
+}
+
 function initAudio(){
   if (audioCtx) return;
   audioCtx = new (window.AudioContext||window.webkitAudioContext)();
@@ -514,21 +542,91 @@ function initAudio(){
   masterGain.gain.value = state.volume;
   masterGain.connect(audioCtx.destination);
 
+  // --- engine tone: two detuned oscillators through a lowpass whose cutoff
+  //     tracks simulated RPM, giving a rising/falling growl instead of a flat beep
+  engineFilter = audioCtx.createBiquadFilter();
+  engineFilter.type = 'lowpass';
+  engineFilter.frequency.value = 400;
+  engineFilter.Q.value = 0.7;
+
   engineOsc = audioCtx.createOscillator();
   engineOsc.type = 'sawtooth';
-  engineOsc.frequency.value = 60;
+  engineOsc.frequency.value = 45;
+  engineOsc2 = audioCtx.createOscillator();
+  engineOsc2.type = 'square';
+  engineOsc2.frequency.value = 45.6;
+  engineOsc2.detune.value = -1200; // an octave down, adds low-end body
+
   engineGain = audioCtx.createGain();
   engineGain.gain.value = 0;
-  engineOsc.connect(engineGain);
+
+  engineOsc.connect(engineFilter);
+  engineOsc2.connect(engineFilter);
+  engineFilter.connect(engineGain);
   engineGain.connect(masterGain);
   engineOsc.start();
+  engineOsc2.start();
+
+  // --- low rumble / intake noise bed under the tone
+  rumbleFilter = audioCtx.createBiquadFilter();
+  rumbleFilter.type = 'bandpass';
+  rumbleFilter.frequency.value = 120;
+  rumbleFilter.Q.value = 0.9;
+  rumbleGain = audioCtx.createGain();
+  rumbleGain.gain.value = 0;
+  rumbleSource = audioCtx.createBufferSource();
+  rumbleSource.buffer = createNoiseBuffer(audioCtx, 2);
+  rumbleSource.loop = true;
+  rumbleSource.connect(rumbleFilter);
+  rumbleFilter.connect(rumbleGain);
+  rumbleGain.connect(masterGain);
+  rumbleSource.start();
+
+  // --- tire screech: filtered noise, gain driven by drift slip intensity
+  screechFilter = audioCtx.createBiquadFilter();
+  screechFilter.type = 'bandpass';
+  screechFilter.frequency.value = 2200;
+  screechFilter.Q.value = 3.2;
+  screechGain = audioCtx.createGain();
+  screechGain.gain.value = 0;
+  screechSource = audioCtx.createBufferSource();
+  screechSource.buffer = createNoiseBuffer(audioCtx, 2);
+  screechSource.loop = true;
+  screechSource.connect(screechFilter);
+  screechFilter.connect(screechGain);
+  screechGain.connect(masterGain);
+  screechSource.start();
+
+  audioReady = true;
 }
-function setEngineSound(speedRatio, running){
-  if (!audioCtx || !state.engineSoundOn) { if(engineGain) engineGain.gain.value = 0; return; }
-  const f = 55 + Math.min(1,Math.abs(speedRatio))*140;
-  engineOsc.frequency.setTargetAtTime(f, audioCtx.currentTime, 0.05);
-  engineGain.gain.setTargetAtTime(running?0.05:0, audioCtx.currentTime, 0.1);
+
+// rpmRatio: 0..1 position within the current gear's power band
+function setEngineSound(rpmRatio, running){
+  if (!audioReady) return;
+  if (!state.engineSoundOn){
+    engineGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.08);
+    rumbleGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.08);
+    return;
+  }
+  const r = clamp(rpmRatio, 0, 1);
+  const baseFreq = 42 + r*95;              // idle ~42Hz rising toward redline
+  const cutoff = 300 + r*2600;
+  engineOsc.frequency.setTargetAtTime(baseFreq, audioCtx.currentTime, 0.06);
+  engineOsc2.frequency.setTargetAtTime(baseFreq*1.013, audioCtx.currentTime, 0.06);
+  engineFilter.frequency.setTargetAtTime(cutoff, audioCtx.currentTime, 0.08);
+  engineGain.gain.setTargetAtTime(running ? 0.09+r*0.05 : 0, audioCtx.currentTime, 0.12);
+  rumbleFilter.frequency.setTargetAtTime(90+r*160, audioCtx.currentTime, 0.1);
+  rumbleGain.gain.setTargetAtTime(running ? 0.035+r*0.03 : 0, audioCtx.currentTime, 0.15);
 }
+
+// intensity: 0..1 how hard the tires are slipping right now
+function setDriftSound(intensity){
+  if (!audioReady || !state.engineSoundOn){ if(audioReady) screechGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1); return; }
+  const i = clamp(intensity,0,1);
+  screechFilter.frequency.setTargetAtTime(1900+i*900, audioCtx.currentTime, 0.05);
+  screechGain.gain.setTargetAtTime(i*0.22, audioCtx.currentTime, i>0 ? 0.03 : 0.25);
+}
+
 function playThud(){
   if (!audioCtx) return;
   const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
@@ -539,6 +637,15 @@ function playThud(){
   g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+0.4);
   o.frequency.exponentialRampToValueAtTime(30, audioCtx.currentTime+0.4);
   o.stop(audioCtx.currentTime+0.42);
+  // a short noise burst layered under the thump for a more physical "crunch"
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = createNoiseBuffer(audioCtx, 0.3);
+  const ng = audioCtx.createGain(); ng.gain.value = 0.25;
+  const nf = audioCtx.createBiquadFilter(); nf.type='lowpass'; nf.frequency.value=700;
+  noise.connect(nf); nf.connect(ng); ng.connect(masterGain);
+  noise.start();
+  ng.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime+0.3);
+  noise.stop(audioCtx.currentTime+0.3);
 }
 function playBlip(freq=440){
   if (!audioCtx) return;
@@ -684,7 +791,7 @@ function initPreviewRenderer(){
   floor.position.y = -0.02;
   previewScene.add(floor);
 
-  previewCar = createCar(CAR_COLORS[state.carColorIdx]);
+  previewCar = createCar(hexToInt(state.carColorHex));
   previewScene.add(previewCar);
 
   resizePreview();
@@ -781,26 +888,20 @@ renderKeybindList();
 
 /* ------------------------------ PLAY MENU WIRING --------------------------- */
 
-function renderColorDots(){
-  const wrap = document.getElementById('color-dots');
-  wrap.innerHTML = '';
-  CAR_COLORS.forEach((c,i)=>{
-    const d = document.createElement('div');
-    d.className = 'dot'+(i===state.carColorIdx?' active':'');
-    d.style.background = '#'+c.toString(16).padStart(6,'0');
-    d.addEventListener('click', ()=>{
-      state.carColorIdx = i;
-      setCarColor(previewCar, c);
-      renderColorDots();
-    });
-    wrap.appendChild(d);
-  });
+function refreshColorSwatch(){
+  document.getElementById('color-swatch').style.background = state.carColorHex;
+  document.getElementById('color-picker').value = state.carColorHex;
 }
-document.getElementById('preview-canvas').addEventListener('click', ()=>{
-  state.carColorIdx = (state.carColorIdx+1) % CAR_COLORS.length;
-  setCarColor(previewCar, CAR_COLORS[state.carColorIdx]);
-  renderColorDots();
+function openColorPicker(){
+  document.getElementById('color-picker').click();
+}
+document.getElementById('color-picker').addEventListener('input', (e)=>{
+  state.carColorHex = e.target.value;
+  setCarColor(previewCar, hexToInt(state.carColorHex));
+  refreshColorSwatch();
 });
+document.getElementById('color-swatch').addEventListener('click', openColorPicker);
+document.getElementById('preview-canvas').addEventListener('click', openColorPicker);
 
 document.getElementById('theme-prev').addEventListener('click', ()=> applyTheme((state.themeIdx-1+THEMES.length)%THEMES.length));
 document.getElementById('theme-next').addEventListener('click', ()=> applyTheme((state.themeIdx+1)%THEMES.length));
@@ -847,6 +948,7 @@ function handlePauseKey(){
   }
 }
 document.getElementById('pause-btn').addEventListener('click', togglePauseWrap);
+document.getElementById('camera-chip').addEventListener('click', cycleCamera);
 document.getElementById('btn-resume').addEventListener('click', togglePauseWrap);
 document.getElementById('btn-restart').addEventListener('click', ()=>{ hideScreen('screen-pause'); startGame(); });
 document.getElementById('btn-quit').addEventListener('click', ()=>{ hideScreen('screen-pause'); endToMenu(); });
@@ -977,6 +1079,97 @@ function formatTime(s){
   return (m>0? m+':'+sec.padStart(4,'0') : sec+'s');
 }
 
+/* ------------------------------ ROUTE HELPERS (city-style paths) ------------ */
+
+// Walk a sequence of {len, turn} legs (turn: -1 left, 0 none, 1 right, applied
+// AFTER the leg) starting at origin/heading 0, and return the built segment
+// list plus corner points — used by any mode that needs a road that isn't
+// just one straight line.
+function buildRoute(legs){
+  let x=0, z=0, heading=0;
+  const segments = [];
+  const corners = [];
+  legs.forEach(leg=>{
+    const fwd = forwardVec(heading);
+    const x2 = x+fwd.x*leg.len, z2 = z+fwd.z*leg.len;
+    segments.push({x1:x,z1:z,x2,z2,angle:heading,length:leg.len,midx:(x+x2)/2,midz:(z+z2)/2});
+    x=x2; z=z2;
+    if (leg.turn){
+      corners.push({x,z});
+      heading += leg.turn*(Math.PI/2);
+    }
+  });
+  return { segments, corners, end:{x,z,heading} };
+}
+function pointOnSegment(seg, f, lateralOffset){
+  const fwd = forwardVec(seg.angle);
+  const nx = Math.cos(seg.angle), nz = -Math.sin(seg.angle);
+  const baseX = seg.x1 + fwd.x*seg.length*f, baseZ = seg.z1 + fwd.z*seg.length*f;
+  return { x: baseX+nx*lateralOffset, z: baseZ+nz*lateralOffset, heading: seg.angle };
+}
+function addDashedLineOriented(midx,midz,length,offset,angle,color){
+  const dashLen=2.2, gap=2.2;
+  const mat = new THREE.MeshStandardMaterial({color, emissive:color, emissiveIntensity:0.5});
+  const fwd = forwardVec(angle);
+  const nx = Math.cos(angle), nz = -Math.sin(angle);
+  const start = -length/2;
+  for (let d=start; d<length/2; d+=dashLen+gap){
+    const cx = midx+fwd.x*(d+dashLen/2) + nx*offset;
+    const cz = midz+fwd.z*(d+dashLen/2) + nz*offset;
+    const seg = new THREE.Mesh(new THREE.BoxGeometry(0.18,0.03,dashLen), mat);
+    seg.position.set(cx,0.035,cz);
+    seg.rotation.y = angle;
+    scene.add(seg);
+  }
+}
+function routeBounds(segments, margin){
+  let minX=Infinity,maxX=-Infinity,minZ=Infinity,maxZ=-Infinity;
+  segments.forEach(s=>{
+    [[s.x1,s.z1],[s.x2,s.z2]].forEach(([px,pz])=>{
+      minX=Math.min(minX,px); maxX=Math.max(maxX,px);
+      minZ=Math.min(minZ,pz); maxZ=Math.max(maxZ,pz);
+    });
+  });
+  return { minX:minX-margin, maxX:maxX+margin, minZ:minZ-margin, maxZ:maxZ+margin,
+    cx:(minX+maxX)/2, cz:(minZ+maxZ)/2, w:(maxX-minX)+margin*2, d:(maxZ-minZ)+margin*2 };
+}
+let _checkerTexture = null;
+function getCheckerTexture(){
+  if (_checkerTexture) return _checkerTexture;
+  const canvas = document.createElement('canvas');
+  canvas.width = 128; canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  const cell = 16;
+  for (let yy=0; yy<8; yy++){
+    for (let xx=0; xx<8; xx++){
+      ctx.fillStyle = ((xx+yy)%2===0) ? '#f2f2f2' : '#0a0a0a';
+      ctx.fillRect(xx*cell, yy*cell, cell, cell);
+    }
+  }
+  _checkerTexture = new THREE.CanvasTexture(canvas);
+  _checkerTexture.magFilter = THREE.NearestFilter;
+  return _checkerTexture;
+}
+function addFinishLine(x,z,heading,roadW,accentColor){
+  const geo = new THREE.PlaneGeometry(roadW, 3.6);
+  const mat = new THREE.MeshStandardMaterial({map:getCheckerTexture(), roughness:0.9});
+  const plane = new THREE.Mesh(geo, mat);
+  plane.rotation.x = -Math.PI/2;
+  plane.rotation.z = -heading;
+  plane.position.set(x,0.04,z);
+  scene.add(plane);
+  const gateMat = new THREE.MeshStandardMaterial({color:accentColor, emissive:accentColor, emissiveIntensity:1.2});
+  const nx = Math.cos(heading), nz = -Math.sin(heading);
+  const leftPost = new THREE.Mesh(new THREE.BoxGeometry(0.5,4,0.5), gateMat);
+  leftPost.position.set(x-nx*roadW/2, 2, z-nz*roadW/2);
+  const rightPost = new THREE.Mesh(new THREE.BoxGeometry(0.5,4,0.5), gateMat);
+  rightPost.position.set(x+nx*roadW/2, 2, z+nz*roadW/2);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(roadW+1,0.4,0.4), gateMat);
+  top.position.set(x,4,z);
+  top.rotation.y = heading;
+  scene.add(leftPost, rightPost, top);
+}
+
 /* ------------------------------ TRAFFIC ------------------------------------ */
 
 function makeTrafficCar(laneX, z, speed, colorHex){
@@ -989,41 +1182,66 @@ function makeTrafficCar(laneX, z, speed, colorHex){
 }
 
 /* ------------------------------ MODE: SPEED --------------------------------- */
+// A zig-zag city route: straight legs joined by 90° turns, with parked cars
+// blocking alternating lanes so the player has to actively change lanes
+// (about 5-6 lane-change moments) instead of just holding the throttle down
+// a single straight road. Ends on a black-and-white checkered finish line.
 
 function buildSpeedWorld(){
   const t = THEMES[state.themeIdx];
-  const length = 1100, roadW = 9.6;
-  addGroundPlane(400,length+400,t.ground,0,length/2);
-  addRoadStrip(0,length/2,roadW,length+40,t.road);
-  addDashedLine(-1.6,0,length,t.line);
-  addDashedLine(1.6,0,length,t.line);
+  const roadW = 9.6, laneW = roadW/3, laneOffsets = [-laneW, 0, laneW];
+
+  const legs = [
+    {len:120, turn:1},
+    {len:95,  turn:-1},
+    {len:120, turn:1},
+    {len:95,  turn:-1},
+    {len:120, turn:1},
+    {len:95,  turn:-1},
+    {len:110, turn:0},
+  ];
+  const route = buildRoute(legs);
+  const { segments, corners, end } = route;
+
+  const b = routeBounds(segments, 90);
+  addGroundPlane(b.w, b.d, t.ground, b.cx, b.cz);
+
   const colliders = [];
-  colliders.push(addWall(-roadW/2-0.6,length/2,1.2,length+40,1.3,t.building));
-  colliders.push(addWall(roadW/2+0.6,length/2,1.2,length+40,1.3,t.building));
-  for (let z=10; z<length; z+=22) addLampPost(-roadW/2-1.3,z,t.buildingLight);
-  for (let z=20; z<length; z+=22) addLampPost(roadW/2+1.3,z,t.buildingLight);
-  // scattered static obstacle cars to dodge
-  const lanes = [-3.2,0,3.2];
-  for (let i=0;i<9;i++){
-    const lx = lanes[Math.floor(Math.random()*3)];
-    const zz = 120 + i*100 + Math.random()*40;
-    colliders.push(addStaticCar(lx,zz,0, CAR_COLORS[Math.floor(Math.random()*CAR_COLORS.length)]));
-  }
-  // finish gate
-  const gateMat = new THREE.MeshStandardMaterial({color:t.sun, emissive:t.sun, emissiveIntensity:1.2});
-  const postL = new THREE.Mesh(new THREE.BoxGeometry(0.5,4,0.5), gateMat); postL.position.set(-roadW/2,2,length);
-  const postR = new THREE.Mesh(new THREE.BoxGeometry(0.5,4,0.5), gateMat); postR.position.set(roadW/2,2,length);
-  const top = new THREE.Mesh(new THREE.BoxGeometry(roadW+1,0.4,0.4), gateMat); top.position.set(0,4,length);
-  scene.add(postL,postR,top);
+  segments.forEach(seg=>{
+    addRoadStrip(seg.midx, seg.midz, roadW, seg.length+roadW, t.road, seg.angle);
+    addDashedLineOriented(seg.midx, seg.midz, seg.length+roadW, -laneW/2, seg.angle, t.line);
+    addDashedLineOriented(seg.midx, seg.midz, seg.length+roadW, laneW/2, seg.angle, t.line);
+    const nx = Math.cos(seg.angle), nz = -Math.sin(seg.angle);
+    const outer = {x:seg.midx+nx*(roadW/2+0.6), z:seg.midz+nz*(roadW/2+0.6)};
+    const inner = {x:seg.midx-nx*(roadW/2+0.6), z:seg.midz-nz*(roadW/2+0.6)};
+    colliders.push(addWall(outer.x,outer.z,0.6,seg.length-roadW*0.6,1.1,t.building,seg.angle));
+    colliders.push(addWall(inner.x,inner.z,0.6,seg.length-roadW*0.6,1.1,t.building,seg.angle));
+    addLampPost(outer.x,outer.z,t.buildingLight);
+  });
+  corners.forEach(c=> addRoadStrip(c.x,c.z,roadW,roadW,t.road,0));
+
+  // parked cars blocking alternating lanes — forces a lane change on almost
+  // every leg (5-6 total across the route before the finish)
+  const blockLane = [-1,1,-1,1,-1,1];
+  segments.slice(0,6).forEach((seg,i)=>{
+    const p = pointOnSegment(seg, 0.55, laneOffsets[blockLane[i]+1]);
+    colliders.push(addStaticCar(p.x, p.z, seg.angle, NPC_COLORS[i % NPC_COLORS.length]));
+    const p2 = pointOnSegment(seg, 0.3, laneOffsets[blockLane[i]+1]);
+    if (i%2===0) colliders.push(addStaticCar(p2.x, p2.z, seg.angle, NPC_COLORS[(i+3) % NPC_COLORS.length]));
+  });
+
+  addFinishLine(end.x, end.z, end.heading, roadW, t.sun);
 
   return {
     colliders, dynamic:[],
     start:{x:0,z:0,heading:0},
-    finishZ:length,
+    finishPoint:end,
     hudMode:'timer',
     update(dt){
       gameState.timerLeft -= dt;
-      if (player.z >= this.finishZ){
+      const fwd = forwardVec(end.heading);
+      const progress = (player.x-end.x)*fwd.x + (player.z-end.z)*fwd.z;
+      if (progress > 0.5){
         endGame('win','Finish Line!', {sub:'You crossed the line in time.', stats:[
           {v:formatTime(gameState.elapsed), l:'Total Time'},
           {v:Math.max(0,gameState.timerLeft).toFixed(1)+'s', l:'Time Left'}
@@ -1032,8 +1250,8 @@ function buildSpeedWorld(){
       }
       if (gameState.timerLeft <= 0){
         endGame('lose','Out of Time', {sub:'You did not reach the finish line.', stats:[
-          {v:Math.round(player.z)+'m', l:'Distance Reached'},
-          {v:length+'m', l:'Target'}
+          {v:formatTime(gameState.elapsed), l:'Time Elapsed'},
+          {v:'Not reached', l:'Finish Line'}
         ]});
         return true;
       }
@@ -1062,7 +1280,7 @@ function buildHighwayWorld(){
     const lx = lanes[Math.floor(Math.random()*3)];
     const zz = 60 + i*70 + Math.random()*40;
     const spd = 6 + Math.random()*9;
-    const tc = makeTrafficCar(lx, zz, spd, CAR_COLORS[Math.floor(Math.random()*CAR_COLORS.length)]);
+    const tc = makeTrafficCar(lx, zz, spd, NPC_COLORS[Math.floor(Math.random()*NPC_COLORS.length)]);
     dynamic.push(tc);
     colliders.push(tc.collider);
   }
@@ -1115,21 +1333,24 @@ function buildDriftWorld(){
     const angle = Math.atan2(dx,dz);
     const midx = (p1.x+p2.x)/2, midz=(p1.z+p2.z)/2;
     addRoadStrip(midx,midz,roadWidth,segLen+0.6,t.road,angle);
-    // outer/inner barrier walls
+    // low guardrails set back from the road edge with a gravel shoulder so a
+    // wide drift slide has room to breathe and doesn't get visually blocked
     const nx = Math.cos(angle), nz = -Math.sin(angle); // normal direction
-    const outerX = midx + nx*(roadWidth/2+0.6), outerZ = midz + nz*(roadWidth/2+0.6);
-    const innerX = midx - nx*(roadWidth/2+0.6), innerZ = midz - nz*(roadWidth/2+0.6);
-    colliders.push(addWall(outerX,outerZ,1.0,segLen+1,1.1,t.building,angle));
-    colliders.push(addWall(innerX,innerZ,1.0,segLen+1,1.1,t.building,angle));
-    if (i%2===0) addLampPost(outerX,outerZ,t.buildingLight);
+    const outerX = midx + nx*(roadWidth/2+1.6), outerZ = midz + nz*(roadWidth/2+1.6);
+    const innerX = midx - nx*(roadWidth/2+1.6), innerZ = midz - nz*(roadWidth/2+1.6);
+    colliders.push(addWall(outerX,outerZ,0.35,segLen+1,0.35,t.building,angle));
+    colliders.push(addWall(innerX,innerZ,0.35,segLen+1,0.35,t.building,angle));
+    // thin ground-level glow strip marks the edge without blocking the view
+    addRoadStrip(outerX,outerZ,0.5,segLen+1,t.buildingLight,angle);
+    addRoadStrip(innerX,innerZ,0.5,segLen+1,t.buildingLight,angle);
   }
   // checkpoints (every 5th point)
   const cpIdx = [0,5,10,15];
-  const cpMat = new THREE.MeshStandardMaterial({color:t.sun, emissive:t.sun, emissiveIntensity:1.4, transparent:true, opacity:0.85});
+  const cpMat = new THREE.MeshStandardMaterial({color:t.sun, emissive:t.sun, emissiveIntensity:1.2, transparent:true, opacity:0.4});
   const checkpoints = cpIdx.map(i=>{
     const p = pts[i];
-    const gate = new THREE.Mesh(new THREE.BoxGeometry(roadWidth,2.6,0.3), cpMat.clone());
-    gate.position.set(p.x,1.3,p.z);
+    const gate = new THREE.Mesh(new THREE.BoxGeometry(roadWidth,0.15,0.3), cpMat.clone());
+    gate.position.set(p.x,0.08,p.z);
     scene.add(gate);
     return {x:p.x, z:p.z, r:6.5, mesh:gate};
   });
@@ -1172,36 +1393,78 @@ function buildDriftWorld(){
 
 function buildParkingWorld(){
   const t = THEMES[state.themeIdx];
-  addGroundPlane(140,140,t.ground,0,0);
-  addRoadStrip(0,0,40,40,t.road);
+  const roadW = 9, laneW = roadW/3, laneOffsets = [-laneW, 0, laneW];
+
+  // approach: a couple of turns plus lane-blocking obstacles (~3 lane changes),
+  // then a final straight that is the parking street itself
+  const legs = [
+    {len:64, turn:1},
+    {len:52, turn:-1},
+    {len:70, turn:0},
+  ];
+  const route = buildRoute(legs);
+  const { segments, corners, end } = route;
+  const parkSeg = segments[segments.length-1];
+
+  const b = routeBounds(segments, 70);
+  addGroundPlane(b.w, b.d, t.ground, b.cx, b.cz);
 
   const colliders = [];
-  // boundary walls
-  colliders.push(addWall(0,-40,80,1.2,1.4,t.building));
-  colliders.push(addWall(0,40,80,1.2,1.4,t.building));
-  colliders.push(addWall(-40,0,1.2,80,1.4,t.building));
-  colliders.push(addWall(40,0,1.2,80,1.4,t.building));
+  segments.forEach((seg,idx)=>{
+    addRoadStrip(seg.midx, seg.midz, roadW, seg.length+roadW, t.road, seg.angle);
+    addDashedLineOriented(seg.midx, seg.midz, seg.length+roadW, -laneW/2, seg.angle, t.line);
+    addDashedLineOriented(seg.midx, seg.midz, seg.length+roadW, laneW/2, seg.angle, t.line);
+    const nx = Math.cos(seg.angle), nz = -Math.sin(seg.angle);
+    const outer = {x:seg.midx+nx*(roadW/2+0.6), z:seg.midz+nz*(roadW/2+0.6)};
+    const inner = {x:seg.midx-nx*(roadW/2+0.6), z:seg.midz-nz*(roadW/2+0.6)};
+    colliders.push(addWall(outer.x,outer.z,0.6,seg.length-roadW*0.6,1.1,t.building,seg.angle));
+    if (seg !== parkSeg) colliders.push(addWall(inner.x,inner.z,0.6,seg.length-roadW*0.6,1.1,t.building,seg.angle));
+    addLampPost(outer.x,outer.z,t.buildingLight);
+  });
+  corners.forEach(c=> addRoadStrip(c.x,c.z,roadW,roadW,t.road,0));
+  // seal the dead end of the parking street
+  const endCap = pointOnSegment(parkSeg,1,0);
+  colliders.push(addWall(endCap.x,endCap.z,roadW,0.6,1.2,t.building,parkSeg.angle));
 
-  // scattered obstacles along the path
-  const obstacles = [[-18,-8],[-6,-14],[8,4],[16,-10],[-4,20],[20,20],[2,-24]];
-  obstacles.forEach(([x,z])=>{
-    colliders.push(addStaticCar(x,z, Math.random()*Math.PI, CAR_COLORS[Math.floor(Math.random()*CAR_COLORS.length)]));
-    addLampPost(x+3,z+3,t.buildingLight);
+  // ~3 lane-blocking obstacles on the approach legs, forcing lane changes
+  const blockLane = [-1,1,-1];
+  segments.slice(0,2).forEach((seg,i)=>{
+    const p1 = pointOnSegment(seg, 0.4, laneOffsets[blockLane[i]+1]);
+    colliders.push(addStaticCar(p1.x, p1.z, seg.angle, NPC_COLORS[i % NPC_COLORS.length]));
   });
-  const bay = {x:26, z:26, heading:0, halfW:1.6, halfD:2.6};
+  {
+    const p2 = pointOnSegment(segments[1], 0.75, laneOffsets[blockLane[2]+1]);
+    colliders.push(addStaticCar(p2.x, p2.z, segments[1].angle, NPC_COLORS[2 % NPC_COLORS.length]));
+  }
+
+  // the parking street: a tight row of parallel-parked cars along one shoulder
+  // with a single gap sized for the player — real parallel-parking maneuvering
+  const rowOffset = laneW*0.92;
+  const rowDistances = [7, 12.2, 17.4, /* gap for bay ~19.9-31.4 */ 33.4, 38.6, 43.8, 49, 54.2, 59.4];
+  rowDistances.forEach((d,i)=>{
+    const p = pointOnSegment(parkSeg, d/parkSeg.length, rowOffset);
+    colliders.push(addStaticCar(p.x, p.z, parkSeg.angle, NPC_COLORS[(i+4) % NPC_COLORS.length]));
+  });
+  const bayCenterDist = (17.4+33.4)/2;
+  const bayCenter = pointOnSegment(parkSeg, bayCenterDist/parkSeg.length, rowOffset);
+  const bay = { x:bayCenter.x, z:bayCenter.z, heading:parkSeg.angle, halfW:1.5, halfD:2.5 };
+
   const lineMat = new THREE.MeshStandardMaterial({color:t.sun, emissive:t.sun, emissiveIntensity:1.3});
-  const mk = (w,d,x,z)=>{ const m=new THREE.Mesh(new THREE.BoxGeometry(w,0.08,d), lineMat); m.position.set(x,0.05,z); scene.add(m); };
-  mk(bay.halfW*2+0.2,0.18, bay.x, bay.z-bay.halfD);
-  mk(bay.halfW*2+0.2,0.18, bay.x, bay.z+bay.halfD);
-  mk(0.18,bay.halfD*2+0.2, bay.x-bay.halfW, bay.z);
-  mk(0.18,bay.halfD*2+0.2, bay.x+bay.halfW, bay.z);
-  [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx,sz])=>{
-    addLampPost(bay.x+sx*(bay.halfW+1), bay.z+sz*(bay.halfD+1), t.sun);
-  });
+  const fwd = forwardVec(bay.heading), nrm = new THREE.Vector3(Math.cos(bay.heading),0,-Math.sin(bay.heading));
+  const mkOriented = (len,thick,offsetAlong,offsetSide)=>{
+    const cx = bay.x+fwd.x*offsetAlong+nrm.x*offsetSide, cz = bay.z+fwd.z*offsetAlong+nrm.z*offsetSide;
+    const m = new THREE.Mesh(new THREE.BoxGeometry(thick,0.06,len), lineMat);
+    m.position.set(cx,0.05,cz); m.rotation.y = bay.heading;
+    scene.add(m);
+  };
+  mkOriented(bay.halfD*2+0.2, 0.18, 0, -bay.halfW);
+  mkOriented(bay.halfD*2+0.2, 0.18, 0, bay.halfW);
+  mkOriented(0.18, bay.halfW*2+0.2, -bay.halfD, 0);
+  mkOriented(0.18, bay.halfW*2+0.2, bay.halfD, 0);
 
   return {
     colliders, dynamic:[], bay,
-    start:{x:-28,z:-28,heading:Math.atan2(bay.x+28,bay.z+28)},
+    start:{x:0,z:0,heading:0},
     hudMode:'park',
     update(dt){
       const dx = Math.abs(player.x-bay.x), dz = Math.abs(player.z-bay.z);
@@ -1252,7 +1515,7 @@ function buildFreeWorld(){
   for (let i=0;i<6;i++){
     const axis = Math.random()>0.5 ? 'x':'z';
     const pos = (Math.random()-0.5)*size*0.7;
-    const mesh = createCar(CAR_COLORS[Math.floor(Math.random()*CAR_COLORS.length)]);
+    const mesh = createCar(NPC_COLORS[Math.floor(Math.random()*NPC_COLORS.length)]);
     scene.add(mesh);
     const speed = 4+Math.random()*4;
     const collider = {type:'circle', x:0, z:0, r:1.5};
@@ -1288,7 +1551,7 @@ function buildWorldForMode(id){
 /* ------------------------------ PLAYER & HUD -------------------------------- */
 
 function createPlayer(){
-  const mesh = createCar(CAR_COLORS[state.carColorIdx]);
+  const mesh = createCar(hexToInt(state.carColorHex));
   scene.add(mesh);
   const p = {
     mesh, x: world.start.x, z: world.start.z,
@@ -1356,30 +1619,32 @@ function updatePlayerPhysics(dt){
 
   if (input.accelerate){
     if (player.speed < cap){
-      const accel = 13 * (1 - Math.max(0,player.speed)/cap*0.5);
+      const accel = 7.2 * (1 - Math.max(0,player.speed)/cap*0.55);
       player.speed += accel*dt;
     }
   } else if (input.brake){
-    player.speed -= (player.speed > 0.15 ? 20 : 9) * dt;
+    player.speed -= (player.speed > 0.15 ? 15 : 6) * dt;
   } else {
-    const fr = 5.2*dt;
+    const fr = 3.6*dt;
     if (player.speed > 0) player.speed = Math.max(0, player.speed-fr);
     else player.speed = Math.min(0, player.speed+fr);
   }
-  player.speed = clamp(player.speed, -7, cap+0.001);
+  player.speed = clamp(player.speed, -5, cap+0.001);
 
   let steer = 0;
   if (input.left) steer += 1;
   if (input.right) steer -= 1;
-  const speedFactor = clamp(1 - Math.abs(player.speed)/48, 0.32, 1);
-  const turnRate = 2.05 * speedFactor;
+  const speedFactor = clamp(1 - Math.abs(player.speed)/32, 0.3, 1);
+  const turnRate = 1.6 * speedFactor;
   if (Math.abs(player.speed) > 0.05){
     player.meshHeading += steer*turnRate*dt*(player.speed<0?-1:1);
   }
-  const drifting = input.handbrake && Math.abs(player.speed) > 5.5;
-  const gripBlend = clamp((drifting?2.2:11)*dt, 0, 1);
+  const drifting = input.handbrake && Math.abs(player.speed) > 4.5;
+  const gripBlend = clamp((drifting?2.0:10)*dt, 0, 1);
   player.velHeading = lerpAngle(player.velHeading, player.meshHeading, gripBlend);
   const slip = angleDiff(player.meshHeading, player.velHeading);
+  player.slip = slip;
+  player.drifting = drifting;
 
   const fwd = forwardVec(player.velHeading);
   player.x += fwd.x*player.speed*dt;
@@ -1390,7 +1655,7 @@ function updatePlayerPhysics(dt){
   player.mesh.userData.wheels.forEach(w=> w.rotation.x += player.speed*dt*2.2);
 
   if (GAME_MODES[state.modeIdx].id === 'drift'){
-    if (Math.abs(slip) > 0.12 && Math.abs(player.speed) > 4){
+    if (Math.abs(slip) > 0.1 && Math.abs(player.speed) > 3){
       const gain = Math.abs(slip)*Math.abs(player.speed)*dt*9;
       gameState.driftMeterCurrent = clamp(gameState.driftMeterCurrent+gain,0,100);
       gameState.driftScoreTotal += gain;
@@ -1400,11 +1665,40 @@ function updatePlayerPhysics(dt){
   }
 }
 
+function cycleCamera(){
+  const idx = CAMERA_MODES.indexOf(state.cameraMode);
+  state.cameraMode = CAMERA_MODES[(idx+1)%CAMERA_MODES.length];
+  playBlip(520);
+  const chip = document.getElementById('camera-chip');
+  if (chip) chip.querySelector('.v').textContent = CAMERA_LABELS[state.cameraMode];
+}
+
 function updateCamera(dt){
-  const camDist = 7.6, camHeight = 3.5;
+  const mode = state.cameraMode;
+
+  if (mode === 'hood'){
+    const fwd = forwardVec(player.meshHeading);
+    const pos = new THREE.Vector3(player.x+fwd.x*0.85, 1.18, player.z+fwd.z*0.85);
+    camera.position.lerp(pos, clamp(dt*16,0,1));
+    camera.up.set(0,1,0);
+    const look = new THREE.Vector3(player.x+fwd.x*12, 1.05, player.z+fwd.z*12);
+    camera.lookAt(look);
+    return;
+  }
+  if (mode === 'top'){
+    const pos = new THREE.Vector3(player.x, 27, player.z+3);
+    camera.position.lerp(pos, clamp(dt*5,0,1));
+    camera.up.set(0,0,-1);
+    camera.lookAt(player.x, 0, player.z);
+    return;
+  }
+  camera.up.set(0,1,0);
+  const camDist = mode==='far' ? 12.5 : 7.6;
+  const camHeight = mode==='far' ? 5.8 : 3.5;
+  const lerpSpeed = mode==='far' ? 3.0 : 4.2;
   const behind = forwardVec(player.meshHeading).multiplyScalar(-camDist);
   const targetPos = new THREE.Vector3(player.x+behind.x, camHeight, player.z+behind.z);
-  camera.position.lerp(targetPos, clamp(dt*4.2,0,1));
+  camera.position.lerp(targetPos, clamp(dt*lerpSpeed,0,1));
   const lookAhead = forwardVec(player.meshHeading).multiplyScalar(5);
   const lookTarget = new THREE.Vector3(player.x+lookAhead.x, 1.1, player.z+lookAhead.z);
   camera.lookAt(lookTarget);
@@ -1415,7 +1709,7 @@ function updateGame(dt){
   updatePlayerPhysics(dt);
   updateCamera(dt);
 
-  if (checkCollisions(player.x, player.z, 1.35)){
+  if (checkCollisions(player.x, player.z, 1.3)){
     playThud();
     const modeName = GAME_MODES[state.modeIdx].name;
     endGame('lose','Crashed!', {sub:'Contact ends the run in '+modeName+' mode.', stats:[
@@ -1428,7 +1722,13 @@ function updateGame(dt){
   const finished = world.update(dt);
   if (finished) return;
 
-  setEngineSound(player.speed/ (GEAR_MAX_SPEED[GEAR_MAX_SPEED.length-1]), true);
+  const gearIdx = player.gear-1;
+  const gearFloor = gearIdx===0 ? 0 : GEAR_MAX_SPEED[gearIdx-1];
+  const gearCeil = GEAR_MAX_SPEED[gearIdx];
+  const rpmRatio = clamp((Math.abs(player.speed)-gearFloor)/Math.max(0.001,(gearCeil-gearFloor)),0,1);
+  setEngineSound(rpmRatio, true);
+  const driftIntensity = clamp(Math.abs(player.slip)/0.5,0,1) * clamp(Math.abs(player.speed)/11,0,1);
+  setDriftSound(driftIntensity);
   updateHud();
 }
 
@@ -1447,13 +1747,14 @@ function startGame(){
   buildLights();
   world = buildWorldForMode(GAME_MODES[state.modeIdx].id);
   player = createPlayer();
-  gameState = { elapsed:0, timerLeft:75, laps:0, driftMeterCurrent:0, driftScoreTotal:0, parkTimer:0, parkDist:undefined };
+  gameState = { elapsed:0, timerLeft:100, laps:0, driftMeterCurrent:0, driftScoreTotal:0, parkTimer:0, parkDist:undefined };
 
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
   document.getElementById('hud').classList.add('active');
   const scheme = effectiveScheme();
   document.getElementById('touch-controls').classList.toggle('active', scheme==='touch');
   document.getElementById('mode-chip').querySelector('.v').textContent = GAME_MODES[state.modeIdx].name;
+  document.getElementById('camera-chip').querySelector('.v').textContent = CAMERA_LABELS[state.cameraMode];
   setupHudForMode();
 
   paused = false;
@@ -1465,7 +1766,7 @@ function togglePause(){
   if (!gameRunning) return;
   paused = !paused;
   if (paused){
-    setEngineSound(0,false);
+    setEngineSound(0,false); if(audioReady) setDriftSound(0);
     showScreen('screen-pause');
     document.getElementById('touch-controls').classList.remove('active');
   } else {
@@ -1476,7 +1777,7 @@ function togglePause(){
 
 function endGame(resultType, title, opts){
   gameRunning = false;
-  setEngineSound(0,false);
+  setEngineSound(0,false); if(audioReady) setDriftSound(0);
   document.getElementById('hud').classList.remove('active');
   document.getElementById('touch-controls').classList.remove('active');
   const rt = document.getElementById('result-title');
@@ -1497,7 +1798,7 @@ function endGame(resultType, title, opts){
 function endToMenu(){
   gameRunning = false;
   paused = false;
-  setEngineSound(0,false);
+  setEngineSound(0,false); if(audioReady) setDriftSound(0);
   document.getElementById('hud').classList.remove('active');
   document.getElementById('touch-controls').classList.remove('active');
   showScreen('screen-main');
@@ -1510,7 +1811,7 @@ function init(){
   initPreviewRenderer();
   applyTheme(0);
   setMode(0);
-  renderColorDots();
+  refreshColorSwatch();
   setupTouchControls();
   animatePreview();
   buildLights(); // idle lights so the scene behind menus isn't pitch black
